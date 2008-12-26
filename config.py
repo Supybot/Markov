@@ -1,5 +1,5 @@
 ###
-# Copyright (c) 2005, James Vega
+# Copyright (c) 2005,2008, James Vega
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -42,7 +42,7 @@ def configure(advanced):
 Markov = conf.registerPlugin('Markov')
 conf.registerPlugin('Markov')
 conf.registerChannelValue(Markov, 'ignoreBotCommands',
-    registry.Boolean(False, """Determines whether messages addressed to the
+    registry.Boolean(True, """Determines whether messages addressed to the
     bot are ignored."""))
 conf.registerChannelValue(Markov, 'minChainLength',
     registry.PositiveInteger(1, """Determines the length of the smallest chain
