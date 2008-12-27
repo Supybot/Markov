@@ -29,7 +29,6 @@
 
 import time
 import Queue
-import anydbm
 import random
 import threading
 
@@ -53,6 +52,7 @@ class DbmMarkovDB(object):
             db.close()
 
     def _getDb(self, channel):
+        import anydbm
         if channel not in self.dbs:
             filename = plugins.makeChannelFilename(self.filename, channel)
             # To keep the code simpler for addPair, I decided not to make
