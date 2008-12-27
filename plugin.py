@@ -75,7 +75,9 @@ class DbmMarkovDB(object):
                 isFirst=False, isLast=False):
         db = self._getDb(channel)
         combined = self._combine(first, second)
-        if db.has_key(combined): # EW!
+        # EW! but necessary since not all anydbm backends support
+        # "combined in db"
+        if db.has_key(combined):
             db[combined] = ' '.join([db[combined], follower])
         else:
             db[combined] = follower
