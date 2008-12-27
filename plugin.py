@@ -128,7 +128,8 @@ class DbmMarkovDB(object):
         db = self._getDb(channel)
         # anydbm sucks in that we're not guaranteed to have .iteritems()
         # *cough*gdbm*cough*, so this has to be done the stupid way
-        follows = [len(db[k].split()) for k in db.keys() if '\n' not in k]
+        follows = [len([f for f in db[k].split() if f != '\n'])
+                   for k in db.keys() if '\n' not in k]
         return sum(follows)
 
 MarkovDB = plugins.DB('Markov', {'anydbm': DbmMarkovDB})
