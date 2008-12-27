@@ -292,8 +292,9 @@ class Markov(callbacks.Plugin):
         <channel>.
         """
         def firsts(db):
-            s = 'There are %s firsts in my Markov database for %s.'
-            irc.reply(s % (db.firsts(channel), channel))
+            irc.reply(
+                format('There are %s firsts in my Markov database for %s.',
+                       db.firsts(channel), channel))
         self.q.enqueue(firsts)
     firsts = wrap(firsts, ['channeldb'])
 
