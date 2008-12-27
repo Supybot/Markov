@@ -41,6 +41,172 @@ import supybot.ircutils as ircutils
 import supybot.schedule as schedule
 import supybot.callbacks as callbacks
 
+class SqlAlchemyMarkovDB(object):
+    def __init__(self, filename, engine):
+        self.dbs = ircutils.IrcDict()
+        self.filename = filename
+        self.engine = engine
+
+    def close(self):
+        self.dbs.clear()
+
+    def _getDb(self, channel, debug=False):
+        if channel in self.dbs:
+            return self.dbs[channel]
+
+        try:
+            import sqlalchemy as sql
+            self.sql = sql
+        except ImportError:
+            raise callbacks.Error, \
+                    'You need to have SQLAlchemy installed to use this ' \
+                    'plugin.  Download it at <http://www.sqlalchemy.org/>'
+
+        filename = plugins.makeChannelFilename(self.filename, channel)
+        engine = sql.create_engine(self.engine + filename, echo=debug)
+        metadata = sql.MetaData()
+        firsts = sql.Table('firsts', metadata,
+                           sql.Column('id', sql.Integer, primary_key=True),
+                           sql.Column('first', sql.Text, unique=True),
+                           sql.Column('count', sql.Integer, default=1),
+                          )
+        lasts = sql.Table('lasts', metadata,
+                          sql.Column('id', sql.Integer, primary_key=True),
+                          sql.Column('last', sql.Text, unique=True),
+                          sql.Column('count', sql.Integer, default=1),
+                         )
+        pairs = sql.Table('pairs', metadata,
+                          sql.Column('id', sql.Integer, primary_key=True),
+                          sql.Column('first', sql.Text, default=sql.null),
+                          sql.Column('second', sql.Text, default=sql.null),
+                          sql.Column('follow', sql.Text, default=sql.null),
+                          sql.Column('count', sql.Integer, default=1),
+                          sql.UniqueConstraint('first', 'second', 'follow'),
+                         )
+        metadata.create_all(engine)
+        self.dbs[channel] = (engine, firsts, lasts, pairs)
+        return self.dbs[channel]
+
+    def _addFirst(self, db, table, first):
+        s = self.sql.select([table.c.count], table.c.first==first)
+        results = db.execute(s)
+        r = results.fetchone()
+        if r is None:
+            db.execute(table.insert(), first=first).close()
+        else:
+            db.execute(table.update(), count=r[0]+1).close()
+
+    def _addLast(self, db, table, last):
+        s = self.sql.select([table.c.count], table.c.last==last)
+        results = db.execute(s)
+        r = results.fetchone()
+        if r is None:
+            db.execute(table.insert(), last=last).close()
+        else:
+            db.execute(table.update(), count=r[0]+1).close()
+
+    def addPair(self, channel, first, second, follower, isFirst, isLast):
+        (db, firsts, lasts, pairs) = self._getDb(channel)
+        if isFirst:
+            self._addFirst(db, firsts, follower)
+            return
+        if isLast:
+            self._addLast(db, lasts, second)
+        s = self.sql.select([pairs.c.count],
+                            self.sql.and_(pairs.c.first==first,
+                                          pairs.c.second==second,
+                                          pairs.c.follow==follower))
+        results = db.execute(s)
+        r = results.fetchone()
+        if r is None:
+            db.execute(pairs.insert(), first=first, second=second,
+                       follow=follower).close()
+        else:
+            db.execute(pairs.update(), count=r[0]+1).close()
+
+    def _weightedChoice(self, results):
+        L = []
+        for t in results:
+            c = t[-1]
+            while c > 0:
+                c -= 1
+                L.append(t[:-1])
+        return utils.iter.choice(L)
+
+    def getFirstPair(self, channel):
+        (db, _, _, pairs) = self._getDb(channel)
+        s = self.sql.select([pairs.c.first, pairs.c.second, pairs.c.count],
+                            pairs.c.first==None)
+        results = db.execute(s)
+        r = results.fetchall()
+        results.close()
+        if not r:
+            raise KeyError
+        return self._weightedChoice(r)
+
+    def getFollower(self, channel, first, second):
+        (db, _, _, pairs) = self._getDb(channel)
+        s = self.sql.select([pairs.c.first, pairs.c.second,
+                             pairs.c.follow, pairs.c.count],
+                            self.sql.and_(pairs.c.first==first,
+                                          pairs.c.second==second))
+        results = db.execute(s)
+        r = results.fetchall()
+        results.close()
+        if not r:
+            raise KeyError
+        print 'foo'
+        print repr(r)
+        L = self._weightedChoice(r)
+        isLast = False
+        if not L[-1]:
+            isLast = True
+        return (L[-2], isLast)
+
+    def firsts(self, channel):
+        (db, firsts, _, _) = self._getDb(channel)
+        s = self.sql.select([firsts.c.count])
+        results = db.execute(s)
+        r = results.fetchall()
+        results.close()
+        if not r:
+            return 0
+        else:
+            return sum([x[0] for x in r])
+
+    def lasts(self, channel):
+        (db, _, lasts, _) = self._getDb(channel)
+        s = self.sql.select([lasts.c.count])
+        results = db.execute(s)
+        r = results.fetchall()
+        results.close()
+        if not r:
+            return 0
+        else:
+            return sum([x[0] for x in r])
+
+    def pairs(self, channel):
+        (db, _, _, pairs) = self._getDb(channel)
+        s = self.sql.select([pairs.c.count])
+        results = db.execute(s)
+        r = results.fetchall()
+        results.close()
+        if not r:
+            return 0
+        else:
+            return sum([x[0] for x in r])
+
+    def follows(self, channel):
+        (db, _, _, pairs) = self._getDb(channel)
+        s = self.sql.select([pairs.c.count],
+                            self.sql.not_(pairs.c.follow==None))
+        results = db.execute(s)
+        r = results.fetchall()
+        results.close()
+        if not r:
+            return 0
+        else:
+            return sum([x[0] for x in r])
 
 class DbmMarkovDB(object):
     def __init__(self, filename):
@@ -134,7 +300,8 @@ class DbmMarkovDB(object):
                    for k in db.keys() if '\n' not in k]
         return sum(follows)
 
-MarkovDB = plugins.DB('Markov', {'anydbm': DbmMarkovDB})
+MarkovDB = plugins.DB('Markov', {'anydbm': DbmMarkovDB,
+                                 'sqlalchemy': SqlAlchemyMarkovDB})
 
 class MarkovWorkQueue(threading.Thread):
     def __init__(self, *args, **kwargs):
@@ -221,7 +388,7 @@ class Markov(callbacks.Plugin):
             maxTries = self.registryValue('maxAttempts', channel)
             Random = kwargs.pop('Random', None)
             while maxTries > 0:
-                maxTries -= 1;
+                maxTries -= 1
                 if word1 and word2:
                     words = [word1, word2]
                     resp = [word1]
