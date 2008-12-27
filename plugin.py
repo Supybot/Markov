@@ -58,10 +58,7 @@ class DbmMarkovDB(object):
             # To keep the code simpler for addPair, I decided not to make
             # self.dbs[channel]['firsts'] and ['lasts'].  Instead, we'll pad
             # the words list being sent to addPair such that ['\n \n'] will be
-            # ['firsts'] and ['\n'] will be ['lasts'].  This also means isFirst
-            # and isLast aren't necessary, but they'll be left alone in case
-            # one of the other Db formats uses them or someone decides that I
-            # was wrong and changes my code.
+            # ['firsts'] and ['\n'] will be ['lasts'].
             self.dbs[channel] = anydbm.open(filename, 'c')
         return self.dbs[channel]
 
@@ -71,39 +68,44 @@ class DbmMarkovDB(object):
         if hasattr(db, 'flush'):
             db.flush()
 
-    def addPair(self, channel, first, second, follower,
-                isFirst=False, isLast=False):
+    def _addPair(self, channel, pair, follow):
         db = self._getDb(channel)
-        combined = self._combine(first, second)
         # EW! but necessary since not all anydbm backends support
         # "combined in db"
-        if db.has_key(combined):
-            db[combined] = ' '.join([db[combined], follower])
+        if db.has_key(pair):
+            db[pair] = ' '.join([db[pair], follow])
         else:
-            db[combined] = follower
-        if follower == '\n':
-            if db.has_key('\n'):
-                db['\n'] = ' '.join([db['\n'], second])
-            else:
-                db['\n'] = second
+            db[pair] = follow
         self._flush(db)
+
+    def _combine(self, first, second):
+        first = first or '\n'
+        second = second or '\n'
+        return '%s %s' % (first, second)
+
+    def addPair(self, channel, first, second, follower, isFirst, isLast):
+        combined = self._combine(first, second)
+        self._addPair(channel, combined, follower or '\n')
+        if isLast:
+            self._addPair(channel, '\n', second)
 
     def getFirstPair(self, channel):
         db = self._getDb(channel)
         firsts = db['\n \n'].split()
         if firsts:
-            return ('\n', utils.iter.choice(firsts))
+            return (None, utils.iter.choice(firsts))
         else:
             raise KeyError, 'No firsts for %s.' % channel
-
-    def _combine(self, first, second):
-        return '%s %s' % (first, second)
 
     def getFollower(self, channel, first, second):
         db = self._getDb(channel)
         followers = db[self._combine(first, second)]
         follower = utils.iter.choice(followers.split(' '))
-        return (follower, follower == '\n')
+        last = False
+        if follower == '\n':
+            follower = None
+            last = True
+        return (follower, last)
 
     def firsts(self, channel):
         db = self._getDb(channel)
@@ -196,18 +198,21 @@ class Markov(callbacks.Plugin):
                 schedule.addEvent(lambda: self.q.enqueue(f), now + delay)
                 self.lastSpoke = now + delay
             words = self.tokenize(msg)
-            words.insert(0, '\n')
-            words.insert(0, '\n')
-            words.append('\n')
-            # This shouldn't happen often (CTCP messages being the possible exception)
-            if not words or len(words) == 3:
+            # This shouldn't happen often (CTCP messages being the possible
+            # exception)
+            if not words:
                 return
             if self.registryValue('ignoreBotCommands', speakChan) and \
                     callbacks.addressed(irc.nick, msg):
                 return
+            words.insert(0, None)
+            words.insert(0, None)
+            words.append(None)
             def doPrivmsg(db):
                 for (first, second, follower) in utils.seq.window(words, 3):
-                    db.addPair(dbChan, first, second, follower)
+                    db.addPair(dbChan, first, second, follower,
+                               isFirst=(first is None and second is None),
+                               isLast=(follower is None))
             self.q.enqueue(doPrivmsg)
 
     def _markov(self, channel, irc, word1=None, word2=None, **kwargs):
@@ -218,16 +223,19 @@ class Markov(callbacks.Plugin):
             while maxTries > 0:
                 maxTries -= 1;
                 if word1 and word2:
-                    givenPair = True
                     words = [word1, word2]
+                    resp = [word1]
+                    follower = word2
                 elif word1 or word2:
-                    givenPair = False
-                    words = ['\n', word1 or word2]
+                    words = [None, word1 or word2]
+                    resp = []
+                    follower = words[-1]
                 else:
-                    givenPair = False
                     try:
-                        # words is of the form ['\n', word]
+                        # words is of the form [None, word]
                         words = list(db.getFirstPair(channel))
+                        resp = []
+                        follower = words[-1]
                     except KeyError:
                         irc.error(
                             format('I don\'t have any first pairs for %s.',
@@ -235,32 +243,23 @@ class Markov(callbacks.Plugin):
                         return # We can't use raise here because the exception
                                # isn't caught and therefore isn't sent to the
                                # server
-                follower = words[-1]
                 last = False
-                resp = []
                 while not last:
                     resp.append(follower)
                     try:
-                        (follower,last) = db.getFollower(channel, words[-2],
-                                                         words[-1])
+                        (follower, last) = db.getFollower(channel, words[-2],
+                                                          words[-1])
                     except KeyError:
                         irc.error('I found a broken link in the Markov chain. '
                                   ' Maybe I received two bad links to start '
                                   'the chain.')
                         return # ditto here re: Raise
                     words.append(follower)
-                if givenPair:
-                    if len(words[:-1]) >= minLength:
-                        irc.reply(' '.join(words[:-1]), **kwargs)
-                        return
-                    else:
-                        continue
+                if len(resp) >= minLength:
+                    irc.reply(' '.join(resp), **kwargs)
+                    return
                 else:
-                    if len(resp) >= minLength:
-                        irc.reply(' '.join(resp), **kwargs)
-                        return
-                    else:
-                        continue
+                    continue
             if not Random:
                 irc.error(
                     format('I was unable to generate a Markov chain at least '
