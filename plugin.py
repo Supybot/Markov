@@ -188,7 +188,6 @@ class Markov(callbacks.Plugin):
                                           speakChan)
             prob = self.registryValue('randomSpeaking.probability', speakChan)
             delay = self.registryValue('randomSpeaking.maxDelay', speakChan)
-            irc = callbacks.SimpleProxy(irc, msg)
             if now > self.lastSpoke + throttle:
                 canSpeak = True
             if canSpeak and random.random() < prob:
