@@ -1,5 +1,5 @@
 ###
-# Copyright (c) 2005, James Vega
+# Copyright (c) 2005,2008, James Vega
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -179,19 +179,20 @@ class Markov(callbacks.Plugin):
 
     def doPrivmsg(self, irc, msg):
         if irc.isChannel(msg.args[0]):
-            channel = plugins.getChannel(msg.args[0])
+            speakChan = msg.args[0]
+            dbChan = plugins.getChannel(speakChan)
             canSpeak = False
             now = time.time()
             throttle = self.registryValue('randomSpeaking.throttleTime',
-                                          channel)
-            prob = self.registryValue('randomSpeaking.probability', channel)
-            delay = self.registryValue('randomSpeaking.maxDelay', channel)
+                                          speakChan)
+            prob = self.registryValue('randomSpeaking.probability', speakChan)
+            delay = self.registryValue('randomSpeaking.maxDelay', speakChan)
             irc = callbacks.SimpleProxy(irc, msg)
             if now > self.lastSpoke + throttle:
                 canSpeak = True
             if canSpeak and random.random() < prob:
-                f = self._markov(channel, irc, prefixNick=False, to=channel,
-                                 Random=True)
+                f = self._markov(speakChan, irc, prefixNick=False,
+                                 to=speakChan, Random=True)
                 schedule.addEvent(lambda: self.q.enqueue(f), now + delay)
                 self.lastSpoke = now + delay
             words = self.tokenize(msg)
@@ -201,12 +202,12 @@ class Markov(callbacks.Plugin):
             # This shouldn't happen often (CTCP messages being the possible exception)
             if not words or len(words) == 3:
                 return
-            if self.registryValue('ignoreBotCommands', channel) and \
+            if self.registryValue('ignoreBotCommands', speakChan) and \
                     callbacks.addressed(irc.nick, msg):
                 return
             def doPrivmsg(db):
                 for (first, second, follower) in utils.seq.window(words, 3):
-                    db.addPair(channel, first, second, follower)
+                    db.addPair(dbChan, first, second, follower)
             self.q.enqueue(doPrivmsg)
 
     def _markov(self, channel, irc, word1=None, word2=None, **kwargs):
